@@ -159,13 +159,11 @@ class YouTubeScraper(BaseScraper[VideoData]):
             if not video_id:
                 return None
 
-            # Parse upload date
+            # Parse upload date - skip if missing (can't calculate real VPH)
             upload_date_str = entry.get("upload_date")
-            if upload_date_str:
-                upload_date = datetime.strptime(upload_date_str, "%Y%m%d")
-            else:
-                # Fallback to current time if no date
-                upload_date = datetime.now()
+            if not upload_date_str:
+                return None
+            upload_date = datetime.strptime(upload_date_str, "%Y%m%d")
 
             # Calculate hours since upload
             hours_since = (datetime.now() - upload_date).total_seconds() / 3600
