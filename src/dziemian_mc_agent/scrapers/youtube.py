@@ -26,15 +26,9 @@ class YouTubeScraper(BaseScraper[VideoData]):
         """Scrape YouTube for recent videos."""
         videos: list[VideoData] = []
 
-        # Scrape from channels
-        channel_tasks = [
-            self._scrape_channel(channel) for channel in self.channels
-        ]
-        channel_results = await asyncio.gather(*channel_tasks, return_exceptions=True)
-
-        for result in channel_results:
-            if isinstance(result, list):
-                videos.extend(result)
+        # Scrape YouTube trending page (Poland)
+        trending = await self._scrape_trending()
+        videos.extend(trending)
 
         # Scrape from keyword searches
         keyword_tasks = [
@@ -62,12 +56,12 @@ class YouTubeScraper(BaseScraper[VideoData]):
 
         return filtered_videos
 
-    async def _scrape_channel(self, channel: str) -> list[VideoData]:
-        """Scrape recent videos from a YouTube channel."""
-        self.logger.info("scraping_channel", channel=channel)
-
-        url = f"https://www.youtube.com/@{channel}/videos"
-        return await self._extract_videos(url, max_videos=10)
+    async def _scrape_trending(self) -> list[VideoData]:
+        """Scrape YouTube trending page for Poland."""
+        self.logger.info("scraping_trending")
+        # YouTube trending for Poland
+        url = "https://www.youtube.com/feed/trending?gl=PL&hl=pl"
+        return await self._extract_videos(url, max_videos=50)
 
     async def _scrape_keyword(self, keyword: str) -> list[VideoData]:
         """Search YouTube for videos matching keyword."""
