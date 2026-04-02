@@ -34,10 +34,6 @@ class GoogleTrendsScraper(BaseScraper[TrendData]):
         """Scrape Google Trends for Poland."""
         trends: list[TrendData] = []
 
-        # Get trending searches
-        trending = await self._get_trending_searches()
-        trends.extend(trending)
-
         # Get related queries for seed keywords sequentially to avoid 429
         for keyword in self.SEED_KEYWORDS:
             related = await self._get_related_queries(keyword)
