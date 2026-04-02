@@ -16,8 +16,8 @@ class ApifyScraper(BaseScraper[TrendData]):
     source = ContentSource.TWITTER  # Primary source, will be set per-item
 
     # Apify actor IDs (these are example public actors)
-    TWITTER_ACTOR = "apidojo/twitter-scraper-lite"
-    TIKTOK_ACTOR = "clockworks/tiktok-scraper"
+    TWITTER_ACTOR = "apidojo~twitter-scraper-lite"
+    TIKTOK_ACTOR = "clockworks~tiktok-scraper"
 
     API_BASE = "https://api.apify.com/v2"
 

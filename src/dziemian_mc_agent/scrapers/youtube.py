@@ -184,7 +184,7 @@ class YouTubeScraper(BaseScraper[VideoData]):
                 video_id=video_id,
                 title=entry.get("title", "Unknown"),
                 url=f"https://www.youtube.com/watch?v={video_id}",
-                channel_name=entry.get("channel", entry.get("uploader", "Unknown")),
+                channel_name=entry.get("channel") or entry.get("uploader") or "Unknown",
                 channel_url=entry.get("channel_url"),
                 views=views,
                 upload_date=upload_date,
