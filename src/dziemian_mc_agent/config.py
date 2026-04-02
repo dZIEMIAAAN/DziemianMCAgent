@@ -95,7 +95,7 @@ class Settings(BaseSettings):
         description="Keywords to search on YouTube",
     )
     min_vph_threshold: float = Field(
-        default=100.0,
+        default=500.0,
         description="Minimum views per hour to consider a video",
     )
 

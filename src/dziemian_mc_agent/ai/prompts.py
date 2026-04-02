@@ -77,7 +77,7 @@ Wyciągaj 1-3 cytaty idealne na:
         {"quote": "Ja jestem królem!", "context": "Wykrzyczane podczas kłótni"},
         {"quote": "To jest SKANDAL", "context": "Reakcja na ujawnione nagranie"}
       ],
-      "uzasadnienie": "VPH 12500, temat eksploduje na Wykopie i X, idealny potencjał memiczny, cytat 'Ja jestem królem' to gotowy refren",
+      "uzasadnienie": "VPH 12500, temat eksploduje na Wykopie i X, idealny potencjał memiczny, cytat 'Ja jestem królem' to gotowy refren. Szczegółowe uzasadnienie dlaczego ten temat pasuje do formatu Dziemiana, co sprawia że ma potencjał wiralowy, jakie emocje wywołuje u widzów i dlaczego wybrany kąt muzyczny będzie działać.",
       "cross_platform_score": 0.95,
       "source": "youtube"
     }
@@ -90,6 +90,7 @@ Wyciągaj 1-3 cytaty idealne na:
 2. DOKŁADNIE 3 z nich muszą mieć typ "🔥 TOTALNY OUTLIER"
 3. Sortuj od najlepszego do najgorszego
 4. Nie wymyślaj - bazuj tylko na dostarczonych danych
+5. Uzasadnienie powinno być szczegółowe (minimum 150 słów) - wyjaśnij dlaczego temat pasuje do formatu, potencjał wiralowy, emocje widzów i dlaczego kąt muzyczny zadziała
 5. Jeśli brakuje transkrypcji, zaproponuj kąt na podstawie tytułu
 6. BĄDŹ ODWAŻNY w sugestiach muzycznych - Dziemian potrafi wszystko!
 """
