@@ -63,22 +63,9 @@ class Settings(BaseSettings):
     )
 
     # YouTube settings
-    youtube_channels: list[str] = Field(
-        default=[
-            "KanalZero",
-            "Ksiazulo",
-            "Rembol",
-            "FameMMA",
-            "CLOUTMMA",
-            "Matura2Bzdura",
-            "StuurTV",
-            "KrzysztofGonciarz",
-            "LekkoStronniczy",
-            "Pyta",
-            "Imponderabilia",
-            "20m2Lodzka",
-        ],
-        description="YouTube channel handles to monitor",
+    youtube_api_key: str = Field(
+        default="",
+        description="YouTube Data API v3 key from Google Cloud Console",
     )
     youtube_keywords: list[str] = Field(
         default=[

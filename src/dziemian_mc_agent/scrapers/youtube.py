@@ -1,292 +1,202 @@
-"""YouTube scraper using yt-dlp."""
+"""YouTube scraper using YouTube Data API v3."""
 
 import asyncio
-import subprocess
-import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional
+
+import httpx
 
 from .base import BaseScraper
 from ..models.schemas import ContentSource, VideoData
 
 
 class YouTubeScraper(BaseScraper[VideoData]):
-    """Scraper for YouTube videos using yt-dlp."""
+    """Scraper for YouTube videos using YouTube Data API v3."""
 
     source = ContentSource.YOUTUBE
+    API_BASE = "https://www.googleapis.com/youtube/v3"
 
     def __init__(self):
         """Initialize YouTube scraper."""
         super().__init__()
-        self.channels = self.settings.youtube_channels
+        self.api_key = self.settings.youtube_api_key
         self.keywords = self.settings.youtube_keywords
         self.min_vph = self.settings.min_vph_threshold
+        self.enabled = bool(self.api_key)
+
+        if not self.enabled:
+            self.logger.info("youtube_api_disabled", reason="No API key configured")
+
+        self.client = httpx.AsyncClient(timeout=30.0)
 
     async def scrape(self) -> list[VideoData]:
         """Scrape YouTube for recent videos."""
+        if not self.enabled:
+            self.logger.info("youtube_skipped", reason="Not configured")
+            return []
+
         videos: list[VideoData] = []
 
-        # Scrape YouTube trending page (Poland)
+        # Trending Poland
         trending = await self._scrape_trending()
         videos.extend(trending)
 
-        # Scrape from keyword searches
-        keyword_tasks = [
-            self._scrape_keyword(keyword) for keyword in self.keywords
-        ]
+        # Keyword searches (concurrent)
+        keyword_tasks = [self._search_keyword(kw) for kw in self.keywords]
         keyword_results = await asyncio.gather(*keyword_tasks, return_exceptions=True)
-
         for result in keyword_results:
             if isinstance(result, list):
                 videos.extend(result)
 
-        # Deduplicate by video_id
-        seen_ids = set()
-        unique_videos = []
-        for video in videos:
-            if video.video_id not in seen_ids:
-                seen_ids.add(video.video_id)
-                unique_videos.append(video)
+        # Deduplicate
+        seen = set()
+        unique = []
+        for v in videos:
+            if v.video_id not in seen:
+                seen.add(v.video_id)
+                unique.append(v)
 
-        # Filter by VPH threshold
-        filtered_videos = [v for v in unique_videos if v.vph >= self.min_vph]
+        # Filter by VPH and sort
+        filtered = [v for v in unique if v.vph >= self.min_vph]
+        filtered.sort(key=lambda v: v.vph, reverse=True)
 
-        # Sort by VPH descending
-        filtered_videos.sort(key=lambda v: v.vph, reverse=True)
+        self.logger.info(
+            "youtube_scrape_done",
+            total=len(unique),
+            after_vph_filter=len(filtered),
+        )
 
-        return filtered_videos
+        return filtered
 
     async def _scrape_trending(self) -> list[VideoData]:
-        """Scrape YouTube trending page for Poland."""
-        self.logger.info("scraping_trending")
-        # YouTube trending for Poland
-        url = "https://www.youtube.com/feed/trending?gl=PL&hl=pl"
-        return await self._extract_videos(url, max_videos=50)
-
-    async def _scrape_keyword(self, keyword: str) -> list[VideoData]:
-        """Search YouTube for videos matching keyword."""
-        self.logger.info("scraping_keyword", keyword=keyword)
-
-        # yt-dlp search syntax
-        url = f"ytsearch20:{keyword}"
-        return await self._extract_videos(url, max_videos=20)
-
-    async def _extract_videos(self, url: str, max_videos: int = 10) -> list[VideoData]:
-        """Extract video metadata using yt-dlp."""
-        videos = []
-
+        """Fetch YouTube trending videos for Poland."""
+        self.logger.info("fetching_trending_pl")
         try:
-            # Run yt-dlp in subprocess to avoid blocking
-            result = await asyncio.to_thread(
-                self._run_ytdlp,
-                url,
-                max_videos,
+            resp = await self.client.get(
+                f"{self.API_BASE}/videos",
+                params={
+                    "part": "snippet,statistics",
+                    "chart": "mostPopular",
+                    "regionCode": "PL",
+                    "maxResults": 50,
+                    "key": self.api_key,
+                },
             )
+            resp.raise_for_status()
+            items = resp.json().get("items", [])
+            return self._parse_items(items)
+        except Exception as e:
+            self.logger.warning("trending_failed", error=str(e))
+            return []
 
-            if not result:
+    async def _search_keyword(self, keyword: str) -> list[VideoData]:
+        """Search YouTube for recent videos matching keyword."""
+        self.logger.info("searching_keyword", keyword=keyword)
+        try:
+            published_after = (
+                datetime.now(timezone.utc) - timedelta(hours=self.settings.lookback_hours)
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            # Step 1: search for video IDs
+            resp = await self.client.get(
+                f"{self.API_BASE}/search",
+                params={
+                    "part": "id",
+                    "q": keyword,
+                    "type": "video",
+                    "order": "viewCount",
+                    "publishedAfter": published_after,
+                    "regionCode": "PL",
+                    "relevanceLanguage": "pl",
+                    "maxResults": 25,
+                    "key": self.api_key,
+                },
+            )
+            resp.raise_for_status()
+            video_ids = [
+                item["id"]["videoId"]
+                for item in resp.json().get("items", [])
+                if item.get("id", {}).get("videoId")
+            ]
+
+            if not video_ids:
                 return []
 
-            entries = result.get("entries", [result])
-
-            for entry in entries[:max_videos]:
-                if not entry:
-                    continue
-
-                video = self._parse_video_entry(entry)
-                if video and self.is_within_timeframe(video.upload_date):
-                    # Try to get transcript
-                    video.transcript = await self._get_transcript(video.video_id)
-                    videos.append(video)
+            # Step 2: fetch full stats for those IDs
+            return await self._fetch_video_details(video_ids)
 
         except Exception as e:
-            self.logger.error(
-                "extract_videos_failed",
-                url=url,
-                error=str(e),
-            )
+            self.logger.warning("keyword_search_failed", keyword=keyword, error=str(e))
+            return []
 
+    async def _fetch_video_details(self, video_ids: list[str]) -> list[VideoData]:
+        """Fetch snippet + statistics for a list of video IDs."""
+        try:
+            resp = await self.client.get(
+                f"{self.API_BASE}/videos",
+                params={
+                    "part": "snippet,statistics",
+                    "id": ",".join(video_ids),
+                    "key": self.api_key,
+                },
+            )
+            resp.raise_for_status()
+            return self._parse_items(resp.json().get("items", []))
+        except Exception as e:
+            self.logger.warning("video_details_failed", error=str(e))
+            return []
+
+    def _parse_items(self, items: list[dict]) -> list[VideoData]:
+        """Parse API response items into VideoData objects."""
+        videos = []
+        for item in items:
+            video = self._parse_item(item)
+            if video and self.is_within_timeframe(video.upload_date.replace(tzinfo=None)):
+                videos.append(video)
         return videos
 
-    def _run_ytdlp(self, url: str, max_videos: int) -> Optional[dict]:
-        """Run yt-dlp and return JSON output."""
-        cmd = [
-            "yt-dlp",
-            "--dump-json",
-            "--flat-playlist",
-            "--no-warnings",
-            "--playlist-end", str(max_videos),
-            "--extractor-args", "youtube:skip=dash,hls",
-            url,
-        ]
-
+    def _parse_item(self, item: dict) -> Optional[VideoData]:
+        """Parse a single API item into VideoData."""
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-
-            if result.returncode != 0:
-                self.logger.warning(
-                    "ytdlp_error",
-                    stderr=result.stderr[:500] if result.stderr else None,
-                )
-                return None
-
-            # Parse JSON lines
-            entries = []
-            for line in result.stdout.strip().split("\n"):
-                if line:
-                    try:
-                        entries.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
-
-            return {"entries": entries}
-
-        except subprocess.TimeoutExpired:
-            self.logger.warning("ytdlp_timeout", url=url)
-            return None
-        except Exception as e:
-            self.logger.error("ytdlp_exception", error=str(e))
-            return None
-
-    def _parse_video_entry(self, entry: dict) -> Optional[VideoData]:
-        """Parse yt-dlp entry into VideoData."""
-        try:
-            video_id = entry.get("id")
+            video_id = item.get("id")
             if not video_id:
                 return None
 
-            # Parse upload date - skip if missing (can't calculate real VPH)
-            upload_date_str = entry.get("upload_date")
-            if not upload_date_str:
+            snippet = item.get("snippet", {})
+            stats = item.get("statistics", {})
+
+            published_at = snippet.get("publishedAt")
+            if not published_at:
                 return None
-            upload_date = datetime.strptime(upload_date_str, "%Y%m%d")
 
-            # Calculate hours since upload
-            hours_since = (datetime.now() - upload_date).total_seconds() / 3600
-            hours_since = max(hours_since, 0.1)  # Prevent division by zero
+            upload_date = datetime.strptime(published_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            hours_since = max(
+                (datetime.now(timezone.utc) - upload_date).total_seconds() / 3600,
+                0.1,
+            )
 
-            views = entry.get("view_count", 0) or 0
-            vph = views / hours_since if hours_since > 0 else 0
+            views = int(stats.get("viewCount", 0) or 0)
+            vph = views / hours_since
 
             return VideoData(
                 video_id=video_id,
-                title=entry.get("title", "Unknown"),
+                title=snippet.get("title", "Unknown"),
                 url=f"https://www.youtube.com/watch?v={video_id}",
-                channel_name=entry.get("channel") or entry.get("uploader") or "Unknown",
-                channel_url=entry.get("channel_url"),
+                channel_name=snippet.get("channelTitle") or "Unknown",
+                channel_url=f"https://www.youtube.com/channel/{snippet.get('channelId', '')}",
                 views=views,
-                upload_date=upload_date,
+                upload_date=upload_date.replace(tzinfo=None),
                 hours_since_upload=hours_since,
                 vph=vph,
-                description=entry.get("description"),
+                description=snippet.get("description"),
             )
 
         except Exception as e:
-            self.logger.warning("parse_entry_failed", error=str(e))
+            self.logger.warning("parse_item_failed", error=str(e))
             return None
 
-    async def _get_transcript(self, video_id: str) -> Optional[str]:
-        """Get video transcript/subtitles."""
-        try:
-            cmd = [
-                "yt-dlp",
-                "--write-auto-sub",
-                "--sub-lang", "pl,en",
-                "--skip-download",
-                "--sub-format", "vtt",
-                "--print", "%(subtitles)j",
-                f"https://www.youtube.com/watch?v={video_id}",
-            ]
+    async def __aenter__(self):
+        return self
 
-            result = await asyncio.to_thread(
-                subprocess.run,
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-
-            if result.returncode == 0 and result.stdout.strip():
-                # Parse subtitles JSON
-                try:
-                    subs = json.loads(result.stdout.strip())
-                    # Extract text from subtitles
-                    if subs and isinstance(subs, dict):
-                        for lang in ["pl", "en"]:
-                            if lang in subs:
-                                # Get subtitle URL and fetch
-                                return await self._fetch_subtitle_text(video_id, lang)
-                except json.JSONDecodeError:
-                    pass
-
-        except Exception as e:
-            self.logger.debug("transcript_fetch_failed", video_id=video_id, error=str(e))
-
-        return None
-
-    async def _fetch_subtitle_text(self, video_id: str, lang: str) -> Optional[str]:
-        """Fetch and parse subtitle text."""
-        try:
-            import tempfile
-            import os
-
-            with tempfile.TemporaryDirectory() as tmpdir:
-                cmd = [
-                    "yt-dlp",
-                    "--write-auto-sub",
-                    "--sub-lang", lang,
-                    "--skip-download",
-                    "--sub-format", "vtt",
-                    "-o", os.path.join(tmpdir, "%(id)s.%(ext)s"),
-                    f"https://www.youtube.com/watch?v={video_id}",
-                ]
-
-                result = await asyncio.to_thread(
-                    subprocess.run,
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-
-                # Find and read the subtitle file
-                for f in os.listdir(tmpdir):
-                    if f.endswith(".vtt"):
-                        with open(os.path.join(tmpdir, f), "r", encoding="utf-8") as sf:
-                            content = sf.read()
-                            # Clean VTT format
-                            return self._clean_vtt(content)
-
-        except Exception as e:
-            self.logger.debug("subtitle_fetch_failed", error=str(e))
-
-        return None
-
-    def _clean_vtt(self, vtt_content: str) -> str:
-        """Clean VTT subtitle format to plain text."""
-        lines = []
-        for line in vtt_content.split("\n"):
-            # Skip timestamps and metadata
-            if "-->" in line or line.startswith("WEBVTT") or not line.strip():
-                continue
-            # Skip position/alignment tags
-            if line.strip().startswith("<") or ":" in line[:10]:
-                continue
-            # Remove HTML-like tags
-            clean_line = line.strip()
-            if clean_line and not clean_line[0].isdigit():
-                lines.append(clean_line)
-
-        # Deduplicate consecutive lines (auto-subs often repeat)
-        deduped = []
-        prev_line = None
-        for line in lines:
-            if line != prev_line:
-                deduped.append(line)
-                prev_line = line
-
-        return " ".join(deduped)
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.client.aclose()
